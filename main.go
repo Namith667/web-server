@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 
 	//"fmt"
+
+	//"fmt"
 	//"log"
+	"errors"
 	"net/http"
 	"os"
 
@@ -15,6 +18,8 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"go.mongodb.org/mongo-driver/bson"
 
 	"go.mongodb.org/mongo-driver/mongo"
@@ -22,68 +27,59 @@ import (
 	"go.uber.org/zap"
 )
 
-var logg *logger.Logger
+var (
+	logg *logger.Logger
+	db   *service.Database
+)
 
 func init() {
 	logg = logger.Init()
-}
 
-func main() {
 	// Load .env file
 	if err := godotenv.Load(); err != nil {
 		logg.Error("Error loading .env file", zap.Error(err))
 		return
 	}
 
-	uri := os.Getenv("MONGODB_URI")
-	if uri == "" {
-		logg.Error("Set the 'MONGODB_URI' environment variable.")
-		return
-	}
-
-	// Create database connection
-	db, err := NewDatabase(uri)
+	var err error
+	db, err = initDatabase()
 	if err != nil {
-		logg.Warn("Error Connecting to Database", zap.Error(err))
-		return
-	}
-	defer db.Disconnect()
-
-	http.HandleFunc("/users", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			handleGetUsers(w, db)
-		case http.MethodPost:
-			handleCreateUser(w, r, db)
-		default:
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
-
-	http.HandleFunc("/users/update", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPut {
-			handleUpdateUser(w, r, db)
-		} else {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
-
-	http.HandleFunc("/users/delete", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodDelete {
-			handleDeleteUser(w, r, db)
-		} else {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
-
-	logg.Info("Server started on port 8080")
-	err = http.ListenAndServe(":8080", nil)
-	if err != nil {
-		logg.Error("Failed to start server", zap.Error(err))
+		logg.Error("Error connecting to database", zap.Error(err))
+		os.Exit(1)
 	}
 }
 
-func NewDatabase(uri string) (*service.Database, error) {
+func main() {
+
+	defer db.Disconnect()
+
+	r := chi.NewRouter()
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+
+	//routes
+	r.Route("/users", func(r chi.Router) {
+		r.Get("/", handleGetUsers)
+		r.Post("/", handleCreateUser)
+		r.Put("/", handleUpdateUser)
+		r.Delete("/", handleDeleteUser)
+	})
+
+	logg.Info("Server started on port 8080")
+	err := http.ListenAndServe(":8080", r)
+	if err != nil {
+		logg.Error("Failed to start server", zap.Error(err))
+
+	}
+}
+
+func initDatabase() (*service.Database, error) {
+	uri := os.Getenv("MONGODB_URI")
+	if uri == "" {
+		logg.Error("Set the 'MONGODB_URI' environment variable.")
+		return nil, errors.New("no MongoDB URI provided")
+	}
+
 	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(uri))
 	if err != nil {
 		return nil, err
@@ -92,7 +88,7 @@ func NewDatabase(uri string) (*service.Database, error) {
 }
 
 // Handlers
-func handleGetUsers(w http.ResponseWriter, db *service.Database) {
+func handleGetUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := db.Read("users")
 	if err != nil {
 		logg.Error("Error reading users", zap.Error(err))
@@ -103,7 +99,7 @@ func handleGetUsers(w http.ResponseWriter, db *service.Database) {
 	json.NewEncoder(w).Encode(users)
 }
 
-func handleCreateUser(w http.ResponseWriter, r *http.Request, db *service.Database) {
+func handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var user model.User
 	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
 		logg.Warn("Error decoding JSON", zap.Error(err))
@@ -120,7 +116,7 @@ func handleCreateUser(w http.ResponseWriter, r *http.Request, db *service.Databa
 	json.NewEncoder(w).Encode(result)
 }
 
-func handleUpdateUser(w http.ResponseWriter, r *http.Request, db *service.Database) {
+func handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	var update model.UpdateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
 		logg.Warn("Error decoding JSON", zap.Error(err))
@@ -153,7 +149,7 @@ func handleUpdateUser(w http.ResponseWriter, r *http.Request, db *service.Databa
 	json.NewEncoder(w).Encode(result) // Send back the result of the update
 	logg.Info("User updated successfully", zap.Int64("matchedCount", result.MatchedCount), zap.Int64("modifiedCount", result.ModifiedCount))
 }
-func handleDeleteUser(w http.ResponseWriter, r *http.Request, db *service.Database) {
+func handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	var filter model.FilterRequest
 	if err := json.NewDecoder(r.Body).Decode(&filter); err != nil {
 		logg.Warn("Error decoding JSON", zap.Error(err))
