@@ -2,7 +2,10 @@ module web-server
 
 go 1.23.1
 
-require go.uber.org/zap v1.27.0
+require (
+	github.com/go-chi/chi/v5 v5.1.0
+	go.uber.org/zap v1.27.0
+)
 
 require (
 	github.com/golang/snappy v0.0.4 // indirect
